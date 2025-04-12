@@ -1,0 +1,37 @@
+{
+  "name": "nysse-mcp-server",
+  "version": "1.0.0",
+  "description": "This MCP server provides tools for AI agents to check bus traffic information. Sample questions:",
+  "main": "dist/index.js",
+  "bin": {
+    "nysse-mcp-server": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "dev": "NODE_ENV=development ts-node-dev --respawn src/index.ts",
+    "dev:win": "set NODE_ENV=development&& ts-node-dev --respawn src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "inspector": "npm run build && npx @modelcontextprotocol/inspector -e WALTTI_CLIENT_ID=test -e WALTTI_CLIENT_SECRET=test -e USE_SIMULATED_DATA=true node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "bus",
+    "nysse",
+    "tampere"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.9.0",
+    "axios": "^1.8.4",
+    "csv-parse": "^5.6.0",
+    "zod": "^3.24.2"
+  }
+}
