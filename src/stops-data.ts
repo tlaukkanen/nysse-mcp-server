@@ -18,20 +18,9 @@ export interface BusStop {
  * Loads bus stop data from the provided CSV file
  * @returns Promise resolving to an array of BusStop objects
  */
-export async function loadStopDataFromCsv(): Promise<BusStop[]> {
+export async function loadStopDataFromCsvString(): Promise<BusStop[]> {
   try {
-	const stopsFilePath = path.join(process.cwd(), 'data', 'gtfs_tampere', 'stops.txt');
-	
-	// Check if file exists before trying to read it
-	try {
-	  await fs.access(stopsFilePath);
-	} catch (error) {
-	  console.error(`File not found: ${stopsFilePath}`);
-	  console.error('Make sure the data directory structure is correct: data/gtfs_tampere/stops.txt');
-	  return [];
-	}
-	
-	const fileContent = await fs.readFile(stopsFilePath, 'utf-8');
+	const fileContent = STOPS_DATA;
 	
 	if (!fileContent || fileContent.trim() === '') {
 	  console.error('Empty stops file found');
@@ -96,6 +85,10 @@ export async function loadStopDataFromCsv(): Promise<BusStop[]> {
 	return [];
   }
 }
+
+// Stop data acquired from https://data.itsfactory.fi/
+// Needs to be updated manually when bus stops change
+
 const STOPS_DATA = `stop_id,stop_code,stop_name,stop_lat,stop_lon,zone_id,wheelchair_boarding,municipality_id
 "0001","0001","Keskustori H","61.4975384496792","23.7615223918528","A","","837"
 "0002","0002","Keskustori G","61.4975876916497","23.7614881473862","A","","837"

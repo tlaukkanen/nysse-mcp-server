@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadStopData, BusStop } from './stops';
-import { getBusArrivals } from './api';
+import { getBusArrivals, getBusPosition } from './api';
 import { z } from "zod";
 
 /**
@@ -12,26 +12,21 @@ async function main() {
   // Check for required environment variables
   const clientId = process.env.WALTTI_CLIENT_ID || 'your_client_id';
   const clientSecret = process.env.WALTTI_CLIENT_SECRET || 'your_client_secret';
-  const useSimulatedData = process.env.USE_SIMULATED_DATA === 'true';
 
   // Set development mode early if we're using simulated data or missing credentials
-  if (useSimulatedData || (!clientId || !clientSecret || clientId === 'your_client_id')) {
-    process.env.NODE_ENV = 'development';
-    //console.warn('Warning: WALTTI_CLIENT_ID and WALTTI_CLIENT_SECRET not set or using default values.');
-    //console.warn('Set USE_SIMULATED_DATA=true to use simulated data without credentials.');
-    //console.warn('Continuing with simulated data...');
+  if (!clientId || !clientSecret || clientId === 'your_client_id') {
+    console.warn('Warning: WALTTI_CLIENT_ID and WALTTI_CLIENT_SECRET not set or using default values.');
   }
 
   // Load stop data from the file
   const stops = await loadStopData();
-  //console.log(`Loaded ${stops.length} bus stops from data file`);
 
   // Create an MCP server instance
   const server = new McpServer(
     {
       name: 'Nysse MCP Server',
       description: 'A server for accessing bus stop data and arrivals in Tampere, Finland',
-      version: '1.0.0',
+      version: '0.1.2',
     }
   );
 
@@ -40,19 +35,21 @@ async function main() {
     'findNextBus',
     'Find the next buses arriving at a specific stop in Tampere, Finland',
     {
-      stopName: z.string().describe('The name of the bus stop to search for. Can be a partial name.'),
+      stopNameOrNumber: z.string().describe('The name or nunmber of the bus stop to search for. Can be a partial name.'),
     },
-    async ({ stopName }) => {
+    async ({ stopNameOrNumber }) => {
       // Find matching stops
       const matchingStops = stops.filter((stop: BusStop) => 
-        stop.stop_name.toLowerCase().includes(stopName.toLowerCase()));
-      
+        stop.stop_name.toLowerCase().includes(stopNameOrNumber.toLowerCase()) ||
+        stop.stop_code.toLowerCase().includes(stopNameOrNumber.toLowerCase())
+      );
+
       if (matchingStops.length === 0) {
         return { 
           content: [
             {
               type: 'text',
-              text: `No bus stops found matching "${stopName}". Please try another stop name.`
+              text: `No bus stops found matching "${stopNameOrNumber}". Please try another stop name.`
             }
           ],
           isError: true
@@ -64,39 +61,100 @@ async function main() {
           content: [
             {
               type: 'text',
-              text: `Found ${matchingStops.length} stops matching "${stopName}". Please be more specific.`
+              text: `Found ${matchingStops.length} stops matching "${stopNameOrNumber}". Please be more specific.`
             }
           ],
-          stops: matchingStops.slice(0, 10).map((stop: BusStop) => stop.stop_name),
           isError: true
         };
       }
 
-      // Get arrivals for the matching stops
+      // Get arrivals only for the first matching stop
       const results = [];
-      for (const stop of matchingStops) {
-        try {
-          const arrivals = await getBusArrivals(stop.stop_code, clientId, clientSecret);
-          results.push({
-            stop: stop.stop_name,
-            stopCode: stop.stop_code,
-            location: `${stop.stop_lat}, ${stop.stop_lon}`,
-            zone: stop.zone_id,
-            arrivals: arrivals
-          });
-        } catch (error) {
-          console.error(`Error fetching data for stop ${stop.stop_name}:`, error);
-        }
+      try {
+        const firstStop = matchingStops[0];
+        const arrivals = await getBusArrivals(firstStop.stop_code, clientId, clientSecret);
+        results.push({
+          stop: firstStop.stop_name,
+          stopCode: firstStop.stop_code,
+          location: `${firstStop.stop_lat}, ${firstStop.stop_lon}`,
+          zone: firstStop.zone_id,
+          arrivals: arrivals,          
+        });
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error fetching bus arrivals for stop "${stopNameOrNumber}". Please try again later.`
+            }
+          ],
+          isError: true
+        };
       }
+
+      // Format the results for output
+      if (results.length === 0 || results[0].arrivals.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `No arrivals found for stop "${stopNameOrNumber}" in near future. Please try again later.`
+            }
+          ],
+          isError: true
+        };
+      }
+
+      // Format the results for output
+      const arrivalsText = results.map((result) => {
+        return result.arrivals?.map((arrival) => 
+            ` - In ${arrival.arrivalIn} minutes at ${arrival.arrivalTime.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})} : bus ${arrival.routeId} with destination ${arrival.headsign} (Trip ID: ${arrival.tripId})`
+          ).join('\n');
+      }).join('\n');
       
       return {
         content: [
           {
             type: 'text',
-            text: `Found ${results.length} bus stops matching "${stopName}":\n` +
-              results.map((result: any) => `- ${result.stop} (${result.stopCode})`).join('\n')
+            text: `Next buses arriving to ${matchingStops[0].stop_name} (${matchingStops[0].stop_code}):\n${arrivalsText}`
           }
         ],
+      };
+    }
+  );
+
+  server.tool(
+    'getBusInformation',
+    'Get information (location, license plate, speed, bearing, id) about a specific bus',
+    {
+      busSearchText: z.string().default('').describe('The route id, trip id, vehicle id, license plate or other identifier of the bus'),
+    },
+    async ({ busSearchText = ''}) => {
+
+      const buses = await getBusPosition(busSearchText, clientId, clientSecret);
+      if (buses.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `No bus information found for the given parameters.`
+            }
+          ],
+          isError: true
+        };
+      }
+
+      const busInfoText = buses.map(bus => 
+        `- Route ID: ${bus.routeId}, Bus ID: ${bus.vehicleId}, License Plate: ${bus.licensePlate}, Position: ${bus.latitude.toFixed(5)},${bus.longitude.toFixed(5)} Speed: ${Math.round(bus.speed)} km/h, Bearing: ${bus.bearing}°`
+      ).join('\n');
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Found ${buses.length} bus(es) with the given parameters:\n${busInfoText}` 
+          }
+        ]
       };
     }
   );

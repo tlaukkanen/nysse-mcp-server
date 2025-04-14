@@ -1,12 +1,27 @@
-import axios from 'axios';
+import { loadTripDataFromCsvString, TripData } from './trips-data';
+const GtfsRealtimeBindings = require('gtfs-realtime-bindings');
 
 interface BusArrival {
-  routeShortName: string;
+  routeId: string;
   headsign: string;
   scheduledArrivalTime: string;
   realtimeArrivalTime: string;
   arrivalIn: number; // minutes
+  arrivalTime: Date;
+  tripId: string;
 }
+
+interface BusInformation {
+  routeId: string;
+  tripId: string;
+  vehicleId: string;
+  licensePlate: string;
+  latitude: number;
+  longitude: number;
+  bearing: number;
+  speed: number;
+}
+
 
 /**
  * Fetches real-time bus arrival information for a specified stop
@@ -22,122 +37,181 @@ export async function getBusArrivals(
   clientSecret: string
 ): Promise<BusArrival[]> {
   // If running in development mode without credentials, use simulated data
-  if (process.env.NODE_ENV === 'development' && (!clientId || !clientSecret || clientId === 'your_client_id')) {
-    console.log(`Using simulated data for stop ${stopCode}`);
-    return simulateBusArrivals(stopCode);
+  if ((!clientId || !clientSecret || clientId === 'your_client_id')) {
+    throw new Error('Client ID and Client Secret are required for production use.');
   }
   
   try {
     // Base URL for GTFS-RT API
     const baseUrl = 'https://data.waltti.fi';
     
-    // Make the API request with a timeout to prevent hanging
-    const response = await axios.get(`${baseUrl}/api/v2/gtfsrt/v1/trip-updates`, {
+    const response = await fetch(`${baseUrl}/tampere/api/gtfsrealtime/v1.0/feed/tripupdate`, {
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`
+        'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
       },
-      timeout: 10000 // 10 second timeout
     });
-
-    if (response.status !== 200) {
-      throw new Error(`API request failed with status ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`${response.url}: ${response.status} ${response.statusText}`);
+      throw error;
     }
-
-    // Validate response data
-    if (!response.data || !response.data.entity) {
-      throw new Error('Invalid or empty response data from API');
-    }
+    const buffer = await response.arrayBuffer();
+    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
+      new Uint8Array(buffer)
+    );
 
     // Process and filter data for the specific stop
     const now = new Date();
     const arrivals: BusArrival[] = [];
 
+    // Get matching trip information
+    const trips = await loadTripDataFromCsvString();
+
     // Process the data based on GTFS-RT format
-    for (const entity of response.data.entity) {
+    for (const entity of feed.entity) {
       if (entity?.tripUpdate?.stopTimeUpdate) {
         for (const update of entity.tripUpdate.stopTimeUpdate) {
-          if (update?.stopId === stopCode && update?.arrival?.time) {
+          if (update?.stopId === stopCode) {
+            const trip = trips.find((trip:TripData) => trip.trip_id === entity.tripUpdate?.trip?.tripId);
+            const tripId = trip ? trip.trip_id : 'Unknown';
+            const busNumber = trip?.route_id || 'Unknown';
+            const busHeadsign = trip?.trip_headsign || 'Unknown';
+
             const arrivalTime = new Date(update.arrival.time * 1000);
             const arrivalInMinutes = Math.round((arrivalTime.getTime() - now.getTime()) / 60000);
-            
+
             // Only include future arrivals
             if (arrivalInMinutes >= 0) {
               arrivals.push({
-                routeShortName: entity.tripUpdate?.vehicle?.label || 'Unknown',
-                headsign: entity.tripUpdate?.trip?.tripHeadsign || 'Unknown',
+                routeId: busNumber,
+                headsign: busHeadsign,
                 scheduledArrivalTime: arrivalTime.toLocaleTimeString(),
                 realtimeArrivalTime: arrivalTime.toLocaleTimeString(),
-                arrivalIn: arrivalInMinutes
+                arrivalIn: arrivalInMinutes,
+                arrivalTime: arrivalTime,
+                tripId: tripId,
               });
+            }
+
+            // Exit loop if we have enough arrivals
+            if (arrivals.length >= 5) {
+              break;
             }
           }
         }
-      }
-    }
 
-    // If no arrivals were found, log this but don't throw an error
-    if (arrivals.length === 0) {
-      console.log(`No upcoming arrivals found for stop ${stopCode}`);
+        if (arrivals.length >= 5) {
+          break;
+        }
+      }
     }
 
     // Sort by arrival time
     return arrivals.sort((a, b) => a.arrivalIn - b.arrivalIn);
   } catch (error) {
-    // Improved error logging with more details
-    if (axios.isAxiosError(error)) {
-      if (error.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
-        console.error(`API error for stop ${stopCode}: Status ${error.response.status}`, 
-          error.response.data);
-      } else if (error.request) {
-        // The request was made but no response was received
-        console.error(`Network error for stop ${stopCode}: No response received`, 
-          error.message);
-      } else {
-        // Something happened in setting up the request
-        console.error(`Request setup error for stop ${stopCode}:`, error.message);
-      }
-    } else {
-      console.error(`Error fetching bus arrivals for stop ${stopCode}:`, error);
-    }
-    
-    // Fallback to simulated data if API call fails
-    console.log(`Falling back to simulated data for stop ${stopCode}`);
-    return simulateBusArrivals(stopCode);
+    throw new Error(`Error fetching bus arrivals for stop ${stopCode}: ${error}`);
   }
 }
 
-/**
- * For testing purposes - simulate bus arrivals when actual API is not available
- * @param stopCode - The code of the bus stop
- * @returns Simulated array of bus arrivals
- */
-export function simulateBusArrivals(stopCode: string): BusArrival[] {
-  const now = new Date();
-  const arrivals: BusArrival[] = [];
-  
-  // Generate random arrivals for testing
-  const routes = ['1', '2', '3', '8', '12', '20', '25', '28'];
-  const destinations = ['City Center', 'Hervanta', 'Tammela', 'Kaleva', 'Lentävänniemi', 'TAYS'];
-  
-  // Generate 1-5 random arrivals
-  const count = Math.floor(Math.random() * 5) + 1;
-  
-  for (let i = 0; i < count; i++) {
-    const minutesFromNow = Math.floor(Math.random() * 60) + i * 5;
-    const arrivalTime = new Date(now.getTime() + minutesFromNow * 60000);
-    
-    arrivals.push({
-      routeShortName: routes[Math.floor(Math.random() * routes.length)],
-      headsign: destinations[Math.floor(Math.random() * destinations.length)],
-      scheduledArrivalTime: arrivalTime.toLocaleTimeString(),
-      realtimeArrivalTime: arrivalTime.toLocaleTimeString(),
-      arrivalIn: minutesFromNow
-    });
+export async function getBusPosition(
+  vehicleSearchText: string, 
+  clientId: string, 
+  clientSecret: string
+): Promise<BusInformation[]> {
+  // If running in development mode without credentials, use simulated data
+  if (process.env.NODE_ENV === 'development' && (!clientId || !clientSecret || clientId === 'your_client_id')) {
+    return [];
   }
   
-  // Sort by arrival time
-  return arrivals.sort((a, b) => a.arrivalIn - b.arrivalIn);
+  try {
+    // Base URL for GTFS-RT API
+    const baseUrl = 'https://data.waltti.fi';
+    
+    const response = await fetch(`${baseUrl}/tampere/api/gtfsrealtime/v1.0/feed/vehicleposition`, {
+      headers: {
+        'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+      },
+    });
+    if (!response.ok) {
+      const error = new Error(`${response.url}: ${response.status} ${response.statusText}`);
+      throw error;
+    }
+    const buffer = await response.arrayBuffer();
+    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
+      new Uint8Array(buffer)
+    );
+
+    // Process and filter data for the specific stop
+    const now = new Date();
+    const buses: BusInformation[] = [];
+
+    // Get matching trip information
+    const trips = await loadTripDataFromCsvString();
+
+    // Process the data based on GTFS-RT format
+    for (const entity of feed.entity) {
+      //console.error(`${JSON.stringify(entity)}`);
+      if (entity?.vehicle) {
+        const vehicleUpdate = entity.vehicle;
+
+        // Don't check if vehicle doesn't have position info
+        if (!vehicleUpdate?.position) {
+          continue;
+        }
+
+        const trip = trips.find((trip:TripData) => trip.trip_id === vehicleUpdate?.trip?.tripId);
+
+        let collectData = false;
+        if(vehicleUpdate.id === vehicleSearchText) {
+          collectData = true;
+        }
+        else if(trip?.route_id === vehicleSearchText) {
+          collectData = true;
+        }
+        else if(vehicleUpdate.vehicle?.license_plate === vehicleSearchText) {
+          collectData = true;
+        }
+        if(collectData) {
+          const vehicleId = vehicleUpdate.vehicle?.id || 'Unknown';
+          const licensePlate = vehicleUpdate.vehicle?.licensePlate || 'Unknown';
+          const speed = vehicleUpdate.position?.speed || 0;
+          const latitude = vehicleUpdate.position?.latitude || 0;
+          const longitude = vehicleUpdate.position?.longitude || 0;
+          const bearing = vehicleUpdate.position?.bearing || 0;
+
+          const busInformation : BusInformation = {
+            routeId: trip?.route_id || 'Unknown',
+            tripId: trip?.trip_id || 'Unknown',
+            vehicleId: vehicleId,
+            licensePlate: licensePlate,
+            latitude: latitude,
+            longitude: longitude,
+            bearing: bearing,
+            // Convert speed from m/s to km/h.
+            speed: (speed * 3.6) || 0,
+          };
+
+          buses.push(busInformation);
+            
+          // Exit loop if we have enough busses
+          if (buses.length >= 4) {
+            break;
+          }
+        }
+      }
+
+      if (buses.length >= 5) {
+        break;
+      }
+    
+    }
+
+    // Sort by arrival time
+    return buses;
+  } catch (error) {
+    console.error(`Error fetching bus information:`, error);
+    
+    // Fallback to simulated data if API call fails
+    return [];
+  }
+  
 }
