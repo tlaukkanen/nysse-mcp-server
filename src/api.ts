@@ -1,6 +1,9 @@
 import { loadTripDataFromCsvString, TripData } from './trips-data';
 const GtfsRealtimeBindings = require('gtfs-realtime-bindings');
 
+// Base URL for GTFS-RT API
+const baseUrl = 'https://data.waltti.fi';
+
 interface BusArrival {
   routeId: string;
   headsign: string;
@@ -41,10 +44,7 @@ export async function getBusArrivals(
     throw new Error('Client ID and Client Secret are required for production use.');
   }
   
-  try {
-    // Base URL for GTFS-RT API
-    const baseUrl = 'https://data.waltti.fi';
-    
+  try {    
     const response = await fetch(`${baseUrl}/tampere/api/gtfsrealtime/v1.0/feed/tripupdate`, {
       headers: {
         'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
@@ -72,7 +72,7 @@ export async function getBusArrivals(
         for (const update of entity.tripUpdate.stopTimeUpdate) {
           if (update?.stopId === stopCode) {
             const trip = trips.find((trip:TripData) => trip.trip_id === entity.tripUpdate?.trip?.tripId);
-            const tripId = trip ? trip.trip_id : 'Unknown';
+            const tripId = trip?.trip_id || entity.tripUpdate?.trip?.tripId || 'Unknown';
             const busNumber = trip?.route_id || 'Unknown';
             const busHeadsign = trip?.trip_headsign || 'Unknown';
 
@@ -122,10 +122,7 @@ export async function getBusPosition(
     return [];
   }
   
-  try {
-    // Base URL for GTFS-RT API
-    const baseUrl = 'https://data.waltti.fi';
-    
+  try {   
     const response = await fetch(`${baseUrl}/tampere/api/gtfsrealtime/v1.0/feed/vehicleposition`, {
       headers: {
         'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,

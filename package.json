@@ -1,6 +1,6 @@
 {
   "name": "nysse-mcp-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "This MCP server provides tools for AI agents to check bus traffic information. Sample questions:",
   "main": "dist/index.js",
   "bin": {
